@@ -1,0 +1,26 @@
+name: Preparar licença Unity Personal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  request-activation:
+    name: Gerar pedido de ativação Unity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Criar arquivo de solicitação de licença
+        id: activation
+        uses: game-ci/unity-request-activation-file@v2
+        with:
+          unityVersion: 2022.3.62f3
+
+      - name: Disponibilizar arquivo de ativação
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unity-Activation-Request
+          path: ${{ steps.activation.outputs.filePath }}
+          if-no-files-found: error
+          retention-days: 3
