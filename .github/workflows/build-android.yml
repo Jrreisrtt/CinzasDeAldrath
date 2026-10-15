@@ -21,10 +21,16 @@ jobs:
       - name: Extrair projeto Unity do game.zip
         shell: bash
         run: |
+          set -e
           mkdir -p project
           unzip -q game.zip -d project
-          test -f project/ProjectSettings/ProjectVersion.txt
-          test -f project/Assets/Editor/ProjectBootstrapper.cs
+          test -f project/ProjectSettings/ProjectVersion.txt || { echo "ERRO: ProjectVersion.txt não encontrado. Estrutura do game.zip:"; ls -R project | head -50; exit 1; }
+          test -f project/Assets/Editor/ProjectBootstrapper.cs || { echo "ERRO: ProjectBootstrapper.cs não encontrado."; exit 1; }
+          echo "Versão do Unity exigida pelo projeto:"
+          cat project/ProjectSettings/ProjectVersion.txt
+          echo "Cenas encontradas:"
+          find project/Assets -name "*.unity"
+          test -f project/Assets/Scenes/TestArena.unity || { echo "ERRO: Assets/Scenes/TestArena.unity não existe."; exit 1; }
 
       - name: Preparar compilação automatizada
         shell: bash
@@ -38,40 +44,40 @@ jobs:
           if old not in s:
               raise SystemExit("Não encontrei o diálogo esperado no ProjectBootstrapper.cs.")
           p.write_text(s.replace(old, new), encoding="utf-8")
-          ci = Path("project/Assets/Editor/CIAndroidBuild.cs")
-          ci.write_text("""using System;
-using System.IO;
-using UnityEditor;
-using UnityEditor.Build.Reporting;
-using UnityEngine;
-
-namespace CinzasDeAldrath.EditorTools
-{
-    public static class CIAndroidBuild
-    {
-        public static void Build()
-        {
-            ProjectBootstrapper.SetupAll();
-            Directory.CreateDirectory("Builds");
-            var options = new BuildPlayerOptions
-            {
-                scenes = new[] { "Assets/Scenes/TestArena.unity" },
-                locationPathName = "Builds/CinzasDeAldrath-teste.apk",
-                target = BuildTarget.Android,
-                options = BuildOptions.Development
-            };
-            BuildReport report = BuildPipeline.BuildPlayer(options);
-            Debug.Log("Resultado da compilação Android: " + report.summary.result);
-            Debug.Log("Erros: " + report.summary.totalErrors + "; avisos: " + report.summary.totalWarnings);
-            if (report.summary.result != BuildResult.Succeeded)
-                throw new Exception("A compilação do APK falhou: " + report.summary.result);
-            if (!File.Exists(options.locationPathName))
-                throw new Exception("O APK não foi encontrado após a compilação.");
-        }
-    }
-}
-""", encoding="utf-8")
           PY
+          cat > project/Assets/Editor/CIAndroidBuild.cs <<'CS'
+          using System;
+          using System.IO;
+          using UnityEditor;
+          using UnityEditor.Build.Reporting;
+          using UnityEngine;
+
+          namespace CinzasDeAldrath.EditorTools
+          {
+              public static class CIAndroidBuild
+              {
+                  public static void Build()
+                  {
+                      ProjectBootstrapper.SetupAll();
+                      Directory.CreateDirectory("Builds");
+                      var options = new BuildPlayerOptions
+                      {
+                          scenes = new[] { "Assets/Scenes/TestArena.unity" },
+                          locationPathName = "Builds/CinzasDeAldrath-teste.apk",
+                          target = BuildTarget.Android,
+                          options = BuildOptions.Development
+                      };
+                      BuildReport report = BuildPipeline.BuildPlayer(options);
+                      Debug.Log("Resultado da compilação Android: " + report.summary.result);
+                      Debug.Log("Erros: " + report.summary.totalErrors + "; avisos: " + report.summary.totalWarnings);
+                      if (report.summary.result != BuildResult.Succeeded)
+                          throw new Exception("A compilação do APK falhou: " + report.summary.result);
+                      if (!File.Exists(options.locationPathName))
+                          throw new Exception("O APK não foi encontrado após a compilação.");
+                  }
+              }
+          }
+          CS
 
       - name: Compilar APK com Unity 2022.3.62f3
         uses: game-ci/unity-builder@v4
@@ -86,6 +92,16 @@ namespace CinzasDeAldrath.EditorTools
           buildMethod: CinzasDeAldrath.EditorTools.CIAndroidBuild.Build
           androidAppBundle: false
           allowDirtyBuild: true
+
+      - name: Validar APK
+        shell: bash
+        run: |
+          set -e
+          APK=project/Builds/CinzasDeAldrath-teste.apk
+          test -s "$APK" || { echo "ERRO: APK ausente ou vazio."; exit 1; }
+          unzip -tq "$APK"
+          unzip -l "$APK" | grep -q AndroidManifest.xml
+          ls -l "$APK"
 
       - name: Disponibilizar APK para download
         if: success()
