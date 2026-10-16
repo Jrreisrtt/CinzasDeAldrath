@@ -30,7 +30,7 @@ jobs:
           cat project/ProjectSettings/ProjectVersion.txt
           echo "Cenas encontradas:"
           find project/Assets -name "*.unity"
-          test -f project/Assets/Scenes/TestArena.unity || { echo "ERRO: Assets/Scenes/TestArena.unity não existe."; exit 1; }
+          test -f project/Assets/Scenes/TestArena.unity && echo "TestArena.unity já existe no zip." || echo "AVISO: TestArena.unity não está no zip; será verificada após o ProjectBootstrapper.SetupAll()."
 
       - name: Preparar compilação automatizada
         shell: bash
@@ -59,6 +59,10 @@ jobs:
                   public static void Build()
                   {
                       ProjectBootstrapper.SetupAll();
+                      AssetDatabase.Refresh();
+                      const string cena = "Assets/Scenes/TestArena.unity";
+                      if (!File.Exists(cena))
+                          throw new Exception("SetupAll() terminou, mas a cena " + cena + " não foi criada.");
                       Directory.CreateDirectory("Builds");
                       var options = new BuildPlayerOptions
                       {
@@ -111,3 +115,4 @@ jobs:
           path: project/Builds/CinzasDeAldrath-teste.apk
           if-no-files-found: error
           retention-days: 14
+          
