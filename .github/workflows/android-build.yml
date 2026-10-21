@@ -1,0 +1,127 @@
+name: Compilar APK Android
+
+# Compila o projeto que está dentro de game.zip e publica o APK como artefato.
+# Licença Unity: veja BUILD-APK-ANDROID.md (secrets UNITY_EMAIL + UNITY_PASSWORD, ou UNITY_SERIAL, ou UNITY_LICENSE).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - game.zip
+      - .github/workflows/android-build.yml
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UNITY_VERSION: 2022.3.62f2
+
+jobs:
+  build:
+    name: APK Android (Unity 2022.3.62f2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Conferir credenciais da licença Unity
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        run: |
+          if [ -n "$UNITY_SERIAL" ] && [ -n "$UNITY_EMAIL" ] && [ -n "$UNITY_PASSWORD" ]; then
+            echo "Licença: serial + conta Unity."
+          elif [ -n "$UNITY_EMAIL" ] && [ -n "$UNITY_PASSWORD" ]; then
+            echo "Licença: ativação pela conta Unity (Personal)."
+          elif [ -n "$UNITY_LICENSE" ]; then
+            echo "Licença: arquivo .ulf (UNITY_LICENSE)."
+          else
+            echo "::error::Nenhuma credencial Unity configurada. Crie os secrets UNITY_EMAIL e UNITY_PASSWORD (veja BUILD-APK-ANDROID.md)."
+            exit 1
+          fi
+
+      - name: Extrair o projeto de game.zip
+        run: |
+          set -e
+          test -f game.zip || { echo "::error::game.zip não encontrado na raiz do repositório."; exit 1; }
+          rm -rf tmp_extract unity-project
+          mkdir tmp_extract
+          unzip -q game.zip -d tmp_extract
+          PV=$(find tmp_extract -path '*ProjectSettings/ProjectVersion.txt' | head -n 1)
+          if [ -z "$PV" ]; then
+            echo "::error::game.zip não contém ProjectSettings/ProjectVersion.txt (não é um projeto Unity)."
+            exit 1
+          fi
+          mv "$(dirname "$(dirname "$PV")")" unity-project
+          echo "Projeto em unity-project/"
+          cat unity-project/ProjectSettings/ProjectVersion.txt
+          ls unity-project unity-project/Assets
+          VERSION_IN_PROJECT=$(grep -m1 m_EditorVersion: unity-project/ProjectSettings/ProjectVersion.txt | awk '{print $2}')
+          if [ "$VERSION_IN_PROJECT" != "$UNITY_VERSION" ]; then
+            echo "::warning::O projeto pede Unity $VERSION_IN_PROJECT, mas o workflow usa $UNITY_VERSION."
+          fi
+
+      - name: Cache da pasta Library
+        uses: actions/cache@v4
+        with:
+          path: unity-project/Library
+          key: library-android-${{ hashFiles('game.zip') }}
+          restore-keys: |
+            library-android-
+
+      - name: Compilar com Unity (game-ci)
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: unity-project
+          unityVersion: ${{ env.UNITY_VERSION }}
+          targetPlatform: Android
+          androidExportType: androidPackage
+          buildMethod: CinzasDeAldrath.EditorTools.BatchBuild.Build
+          buildName: CinzasDeAldrath
+          versioning: None
+          allowDirtyBuild: true
+
+      - name: Conferir o APK
+        run: |
+          set -e
+          APK=$(find build -name '*.apk' | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "::error::Nenhum APK foi gerado."
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$APK")
+          echo "APK: $APK ($SIZE bytes)"
+          if [ "$SIZE" -lt 1000000 ]; then
+            echo "::error::APK pequeno demais ($SIZE bytes)."
+            exit 1
+          fi
+          unzip -l "$APK" | grep -E 'AndroidManifest.xml|classes.dex|lib/.*/libil2cpp.so|lib/.*/libunity.so'
+          {
+            echo "### APK gerado"
+            echo "- Arquivo: \`$(basename "$APK")\`"
+            echo "- Tamanho: $((SIZE / 1024 / 1024)) MB"
+            echo "- Arquiteturas: $(unzip -l "$APK" | grep -oE 'lib/[^/]+/libil2cpp.so' | cut -d/ -f2 | sort -u | tr '\n' ' ')"
+            echo "- Tipo: build de desenvolvimento, assinado com a chave de debug. Não testado em aparelho."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar o APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CinzasDeAldrath-APK-Android
+          path: build/Android/*.apk
+          retention-days: 14
+          if-no-files-found: error
